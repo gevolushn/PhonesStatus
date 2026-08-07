@@ -1,16 +1,23 @@
 """
 xlsx_parser.py — читання таблиці телефонів з Excel файлу.
-Шукає аркуш з "телефон" в назві, читає колонки B (номер) та H (статус).
+Шукає аркуш з "телефон" в назві, читає колонки F (номер) та H (статус).
 """
 import re
 from core.logger import log
 from openpyxl import load_workbook
 
+# Позиції колонок у таблиці (0-based індекси в кортежі рядка).
+# Виведені в константи, бо розкладка таблиці вже змінювалась: до 2026-08 внутрішній
+# номер лежав у колонці B, потім B стала «Поверх», а номер переїхав у F.
+_COL_NUMBER: int = 5   # F — «Внутрішній»
+_COL_STATUS: int = 7   # H — «Статус»
+_MIN_COLUMNS: int = _COL_STATUS + 1
+
 
 def read_xlsx(path: str) -> dict[str, str]:
     """
     Повертає словник {внутрішній_номер: 'ON' або 'OFF'}.
-    Колонка B (індекс 1) — номер телефону, колонка H (індекс 7) — статус.
+    Колонка F — внутрішній номер, колонка H — статус (див. _COL_* вище).
     """
     log.info(f"Читаю xlsx: {path}")
     wb = load_workbook(path, read_only=True, data_only=True)
@@ -35,10 +42,10 @@ def read_xlsx(path: str) -> dict[str, str]:
 
     phones = {}
     for row in ws.iter_rows(values_only=True):
-        if len(row) < 8:
+        if len(row) < _MIN_COLUMNS:
             continue
-        raw_num    = row[1]
-        raw_status = row[7]
+        raw_num    = row[_COL_NUMBER]
+        raw_status = row[_COL_STATUS]
 
         if raw_num is None:
             continue

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 # ─── Ручна ідентичність (редагується при старті нового проєкту) ───────────────
 APP_NAME: str        = "PhonesStatus"              # ← людська назва (title вікна, MessageBox, логи)
-APP_VERSION: str     = "1.1.0"                     # ← оновлювати перед кожним релізом
+APP_VERSION: str     = "1.1.1"                     # ← оновлювати перед кожним релізом
 GITHUB_REPO: str     = "gevolushn/PhonesStatus"    # ← реальний репозиторій
 GITHUB_PRIVATE: bool = True                        # ← False → публічний (без токену)
 GITHUB_TOKEN: str    = ""                          # ← ЗАПОВНИТИ ВРУЧНУ: fine-grained PAT,
