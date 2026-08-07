@@ -1,0 +1,37 @@
+# ── Build-generated (НЕ версіонувати) ──
+core/_build_dist.py          # тип дистрибуції; пишеться spec при freeze
+build/
+dist/
+*.manifest
+
+# PyInstaller-артефакти збірки updater.exe (сам updater.exe — версіонується!)
+assets/updater/build/
+assets/updater/dist/
+assets/updater/updater.spec
+
+# ── Дані часу виконання ──
+# ⚠️ Провідний слеш обов'язковий: шаблон БЕЗ нього діє на будь-якому рівні вкладеності
+# (`temp/` викинув би і `assets/temp/`, і будь-яку іншу вкладену теку з такою назвою).
+logs/*.log
+data/settings.json
+data/settings.json.tmp
+/temp/
+/exports/
+
+# ── Dev-секрети ──
+.env
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ── IDE / ОС ──
+.vscode/
+.idea/
+.obsidian/
+Thumbs.db
+ehthumbs.db
+desktop.ini

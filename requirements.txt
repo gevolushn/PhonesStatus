@@ -1,0 +1,21 @@
+# ══════════════════════════════════════════
+#  Основні залежності
+# ══════════════════════════════════════════
+customtkinter>=5.2.0
+openpyxl>=3.1.0        # читання таблиці телефонів (.xlsx) — parsers/xlsx_parser.py
+
+# ══════════════════════════════════════════
+#  Опційно — розкоментувати якщо потрібно
+# ══════════════════════════════════════════
+# requests>=2.31.0       # мережеві запити (updater використовує urllib — без requests)
+# Pillow>=10.0.0         # зображення в GUI (потрібне для optional_modules/gui/tray.py)
+# pywin32>=306           # Windows API понад ctypes
+# pystray>=0.19.5        # іконка у системному треї (optional_modules/gui/tray.py)
+# pyinstaller>=6.0.0     # збірка .exe (тільки для dev)
+
+# ══════════════════════════════════════════
+#  Стандартна бібліотека — НЕ встановлювати
+# ══════════════════════════════════════════
+# tkinter, os, sys, json, re, struct, threading,
+# glob, logging, base64, ctypes, datetime, pathlib,
+# collections, winreg, urllib, tempfile, shutil, subprocess
