@@ -46,7 +46,7 @@ from gui.settings_window import show_settings
 from gui.theme import theme_mgr
 from gui.update_dialog import show_update_dialog
 from parsers.xlsx_parser import read_xlsx, list_sheets, detect_sheet
-from parsers.sheets_parser import read_sheet
+from parsers.sheets_parser import read_sheet, SheetsError
 from parsers.pbx_manual import read_manual
 from parsers.pbx_ari import read_ari, AriError
 from parsers.comparator import compare
@@ -202,10 +202,17 @@ class AppWindow(ctk.CTk):
         else:
             self._pbx_auto.status.configure(text=f"Користувач: {user}. Готово до запиту.")
 
+        sheet_url = self._config.get("sheet_url", "").strip()
         self._table_auto.target.configure(
-            text=self._config.get("sheet_url", "") or "— Google Sheets —")
-        self._table_auto.status.configure(
-            text="Авто-режим таблиці ще не реалізований. Перемкніть на «Ручний».")
+            text=sheet_url or "— посилання на таблицю не вказано —")
+        if not sheet_url:
+            self._table_auto.status.configure(
+                text="Вкажіть посилання й API-ключ у «Налаштування».")
+        elif not self._config.get("sheet_api_key", "").strip():
+            self._table_auto.status.configure(
+                text="API-ключ Google не заповнений — відкрийте «Налаштування».")
+        else:
+            self._table_auto.status.configure(text="Готово до запиту.")
 
         self._update_table_hint()
 
@@ -372,6 +379,13 @@ class AppWindow(ctk.CTk):
         table_auto = self._config.get("table_mode", "manual") == "auto"
         pbx_auto = self._config.get("pbx_mode", "manual") == "auto"
 
+        if table_auto and not self._config.get("sheet_url", "").strip():
+            messagebox.showwarning(
+                "Таблиця не налаштована",
+                "Вкажіть посилання на Google-таблицю та API-ключ "
+                "у «⚙ Налаштування».", parent=self)
+            return
+
         path = self.xlsx_path.get().strip()
         if not table_auto and not path:
             messagebox.showwarning(
@@ -394,7 +408,8 @@ class AppWindow(ctk.CTk):
         def work():
             if table_auto:
                 table = read_sheet(
-                    config.get("sheet_url", ""), config.get("table_sheet", ""),
+                    config.get("sheet_url", ""), config.get("sheet_api_key", ""),
+                    config.get("table_sheet", ""),
                     config.get("table_col_number", "F"), config.get("table_col_status", "H"))
             else:
                 table = read_xlsx(
@@ -418,6 +433,10 @@ class AppWindow(ctk.CTk):
         """Успіх фонової задачі: (Comparison, чи вичерпні дані АТС)."""
         result, pbx_complete = payload
         self._show_result(result, pbx_complete)
+        if self._config.get("table_mode", "manual") == "auto":
+            self._table_auto.status.configure(
+                text=f"Отримано {result.table_count} номерів "
+                     f"({datetime.now().strftime('%H:%M:%S')}).")
         if self._config.get("pbx_mode", "manual") == "auto":
             self._pbx_auto.status.configure(
                 text=f"Отримано {result.pbx_count} номерів "
@@ -429,6 +448,10 @@ class AppWindow(ctk.CTk):
             log.error(f"ARI: {exc}")
             self._pbx_auto.status.configure(text=f"Помилка: {exc}")
             messagebox.showerror("Не вдалося отримати дані з АТС", str(exc), parent=self)
+        elif isinstance(exc, SheetsError):
+            log.error(f"Google Sheets: {exc}")
+            self._table_auto.status.configure(text=f"Помилка: {exc}")
+            messagebox.showerror("Не вдалося прочитати Google-таблицю", str(exc), parent=self)
         elif isinstance(exc, NotImplementedError):
             messagebox.showinfo("Режим недоступний", str(exc), parent=self)
         else:

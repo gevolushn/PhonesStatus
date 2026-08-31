@@ -99,7 +99,7 @@ class SettingsWindow(ctk.CTkToplevel):
         # grab_set() — СВІДОМО НЕ ВИКЛИКАЄМО (див. docstring модуля)
 
         self.grid_columnconfigure(0, weight=1)
-        center_on_parent(self, self._parent, 520, 620)
+        center_on_parent(self, self._parent, 540, 660)
 
         # Вміст — у CTkScrollableFrame, а не прямо на self (D-33). Шаблонне вікно з
         # двома розділами вміщується й так, але дефект з'являється рівно тоді, коли
@@ -115,6 +115,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self._build_updates()
         self._build_pbx()       # проєктна секція
         self._build_table()     # проєктна секція
+        self._build_sheets()    # проєктна секція
         self._build_footer()   # ПОЗА self._body — футер лишається закріпленим
 
         self.bind("<Escape>", lambda _e: self._on_close())
@@ -240,6 +241,33 @@ class SettingsWindow(ctk.CTkToplevel):
             placeholder="порожньо → автовизначення")
         self._col_number = self._field(row=18, label="Колонка номера:", key="table_col_number")
         self._col_status = self._field(row=19, label="Колонка статусу:", key="table_col_status")
+
+    def _build_sheets(self) -> None:
+        """Секція Google Sheets — параметри авто-режиму таблиці."""
+        body = self._body
+        ctk.CTkLabel(
+            body, text="Google Sheets (авто-режим таблиці)",
+            font=ctk.CTkFont(size=14, weight="bold"), anchor="w",
+        ).grid(row=20, column=0, padx=20, pady=(18, 4), sticky="ew")
+        ctk.CTkLabel(
+            body, text="Посилання копіюється з адресного рядка браузера. Таблиця має бути "
+                       "відкрита як «будь-хто з посиланням». Аркуш і колонки беруться "
+                       "з розділу вище — ті самі, що для .xlsx.",
+            font=ctk.CTkFont(size=11), text_color="gray60", anchor="w",
+            wraplength=420, justify="left",
+        ).grid(row=21, column=0, padx=20, pady=(0, 6), sticky="ew")
+
+        self._sheet_url = self._field(row=22, label="Посилання:", key="sheet_url")
+        self._sheet_key = self._field(
+            row=23, label="API-ключ:", key="sheet_api_key", secret=True)
+
+        ctk.CTkLabel(
+            body, text="Ключ створюється в Google Cloud Console (Sheets API, безкоштовно) "
+                       "і потрібен не для доступу, а щоб запити рахувались по вашій квоті, "
+                       "а не як анонімний трафік. Зберігається зашифрованим через DPAPI.",
+            font=ctk.CTkFont(size=11), text_color="gray60", anchor="w",
+            wraplength=420, justify="left",
+        ).grid(row=24, column=0, padx=20, pady=(6, 0), sticky="ew")
 
     def _field(self, row: int, label: str, key: str,
                secret: bool = False, placeholder: str = "") -> ctk.CTkEntry:

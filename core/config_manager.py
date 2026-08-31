@@ -67,12 +67,13 @@ DEFAULT_CONFIG: dict = {
     "table_sheet":       "",         # назва аркуша; порожньо → автовизначення за «телефон»
     "table_col_number":  "F",        # колонка внутрішнього номера
     "table_col_status":  "H",        # колонка статусу (ON/OFF)
-    # Google Sheets (auto-режим таблиці) — модуль поки заглушка
-    "sheet_url":         "",
+    # Google Sheets (auto-режим таблиці)
+    "sheet_url":         "",         # посилання з адресного рядка браузера
+    "sheet_api_key":     "",         # ← SECRET_FIELDS: на диску лежить як dpapi:<base64>
 }
 
 # Поля, які на диску зберігаються зашифрованими (див. core/dpapi.py).
-SECRET_FIELDS: tuple[str, ...] = ("ari_password",)
+SECRET_FIELDS: tuple[str, ...] = ("ari_password", "sheet_api_key")
 
 
 # ─── Таблиця міграцій ─────────────────────────────────────────────────────────
