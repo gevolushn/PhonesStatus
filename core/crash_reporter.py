@@ -57,9 +57,7 @@ def _write_crash(exc_type, exc_value, exc_tb, app_name: str, thread_name: str | 
     """Пише crash-лог і емітує подію CRASH_OCCURRED."""
     now = datetime.now()
     stamp = now.strftime("%Y-%m-%d_%H-%M-%S")
-    logs_dir = _logs_dir()
-    os.makedirs(logs_dir, exist_ok=True)
-    crash_path = os.path.join(logs_dir, f"crash_{stamp}.log")
+    crash_path = os.path.join(_logs_dir(), f"crash_{stamp}.log")
 
     tb_text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
     summary = f"{exc_type.__name__}: {exc_value}"
@@ -73,15 +71,26 @@ def _write_crash(exc_type, exc_value, exc_tb, app_name: str, thread_name: str | 
         f"{'=' * 60}\n\n"
     )
 
+    # makedirs — усередині try разом із записом. Раніше він стояв зовні й без захисту:
+    # компонент, чия єдина задача — доповісти про крах, сам падав на найімовірнішому
+    # краху (тека без прав на запис), і користувач не отримував НІЧОГО. Тека може стати
+    # недоступною і посеред сесії (від'єднали мережевий диск, змінили ACL).
+    saved = True
     try:
+        os.makedirs(os.path.dirname(crash_path), exist_ok=True)
         with open(crash_path, "w", encoding="utf-8") as f:
             f.write(header)
             f.write(tb_text)
     except Exception as write_err:
-        log.error(f"Не вдалося записати crash-лог: {write_err}")
+        saved = False
+        log.error(f"Не вдалося записати crash-лог у '{crash_path}': {write_err}")
 
     log.critical(f"НЕОБРОБЛЕНИЙ ВИНЯТОК [{where}]: {summary}")
-    log.critical(f"Crash-лог: {crash_path}")
+    if saved:
+        log.critical(f"Crash-лог: {crash_path}")
+    else:
+        # Файлу немає — traceback мусить лишитись хоча б у загальному лозі.
+        log.critical(f"Crash-лог не збережено. Traceback:\n{tb_text}")
 
     # Notify GUI через Event Bus (якщо він ініціалізований)
     try:

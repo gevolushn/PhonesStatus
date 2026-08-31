@@ -6,7 +6,7 @@ import os
 
 import customtkinter as ctk
 
-from core.logger import log
+from core.logger import log, file_handler_error
 from core import instance_lock, cleanup, config_manager, paths
 from core.crash_reporter import install_crash_handler
 from core.updater import cleanup_update_artifacts
@@ -23,6 +23,22 @@ def _resolve_theme_path(theme_name: str) -> str:
     return "blue"
 
 
+def _report_storage_state() -> None:
+    """
+    Повідомляє, якщо дані лежать НЕ поруч із програмою або лог-файл недоступний.
+
+    Мовчазний переїзд даних гірший за саму проблему: користувач шукатиме settings.json
+    і logs/ поруч із .exe, а їх там уже немає. Тому обидва випадки — гучний warning.
+    """
+    log.info(f"Корінь даних: {paths.writable_root()}")
+    reason = paths.fallback_reason()
+    if reason:
+        log.warning(reason)
+    log_error = file_handler_error()
+    if log_error:
+        log.warning(log_error)
+
+
 def main() -> None:
     install_crash_handler(app_name=build_info.APP_NAME)  # ⓪ ловити крах навіть на старті
     _mutex = instance_lock.check_single_instance()   # ① один екземпляр
@@ -32,6 +48,7 @@ def main() -> None:
     log.info("═" * 50)
     log.info(f"{build_info.APP_NAME} — старт (v{build_info.APP_VERSION})")
     log.info("═" * 50)
+    _report_storage_state()                           # ③½ куди насправді пишемо
 
     config = config_manager.load_config()             # ④ конфіг
 

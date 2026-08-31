@@ -19,6 +19,7 @@ import customtkinter as ctk
 
 from core.events import subscribe, unsubscribe, Events
 from gui.theme import theme_mgr
+from gui.window_utils import center_on_parent
 
 
 # ─── Базовий клас для всіх діалогів ──────────────────────────────────────────
@@ -44,10 +45,7 @@ class _BaseDialog(ctk.CTkToplevel):
         self.bind("<Escape>", self._on_escape)
 
     def _center(self, w: int, h: int) -> None:
-        self.update_idletasks()
-        x = self._parent.winfo_x() + (self._parent.winfo_width() - w) // 2
-        y = self._parent.winfo_y() + (self._parent.winfo_height() - h) // 2
-        self.geometry(f"{w}x{h}+{x}+{y}")
+        center_on_parent(self, self._parent, w, h)
 
     def _on_theme(self, mode: str, palette: dict) -> None:
         try:

@@ -65,6 +65,22 @@
   ```
 - Не забути додати `.env` у `.gitignore`.
 
+### `net_path.py` — UNC замість букви мережевого диска
+- **Залежності:** немає (stdlib, ctypes).
+- **Що робить:** буква мережевого диска — запис у токені сеансу, а не властивість
+  машини: не видно з-під адміністратора (і навпаки), автозапуск може стартувати
+  раніше за відновлення мапінгів. `resolve_unc()` перетворює `Z:\path` на
+  `\\server\share\path`, який від токена не залежить. `probe_write()` — чесна
+  перевірка запису пробним файлом, не `os.access`.
+- **Інтеграція** (типово — разом із `core/elevation.py`):
+  ```python
+  from core.elevation import is_elevated
+  from core.net_path import resolve_unc, is_network_path
+
+  if is_elevated() and is_network_path(user_path):
+      user_path = resolve_unc(user_path)
+  ```
+
 ---
 
 ## `gui/` — опційні модулі інтерфейсу
@@ -114,6 +130,25 @@
   splash.set_status("Завантаження...", progress=0.3)
   splash.close()  # перед AppWindow(config)
   ```
+
+### `settings_window.py` — вікно налаштувань
+- **Залежності:** немає (понад customtkinter).
+- **Що робить:** тема, `remember`, частота перевірки оновлень (`update_check`) і кнопка
+  «Перевірити зараз». Немодальне, один екземпляр, зміни застосовуються **одразу**
+  (кнопки «Скасувати» немає — тема й так перемикається миттєво через Event Bus).
+- **Інтеграція** (у `app_window.py`):
+  ```python
+  from gui.settings_window import show_settings
+
+  def _open_settings(self) -> None:
+      show_settings(self, self._config, on_save=self._save_settings,
+                    on_check_updates=self.check_updates_now)
+
+  def _save_settings(self, config: dict) -> None:
+      if config.get("remember", False):      # рішення про запис — за власником конфігу
+          config_manager.save_config(config)
+  ```
+- Викликати з меню трею (`menu_extra=[("Налаштування", self._open_settings)]`) або з кнопки.
 
 ---
 

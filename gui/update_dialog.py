@@ -7,21 +7,38 @@ from __future__ import annotations
 
 import webbrowser
 from tkinter import messagebox
+from typing import Callable
 
 import customtkinter as ctk
 
 from core.events import subscribe, unsubscribe, Events
 from core.logger import log
-from core.updater import UpdateInfo, launch_update
+from core.updater import UpdateInfo, launch_update, PROGRESS_APPLY_FAILED
 import core.build_info as build_info
 from gui.theme import theme_mgr
+from gui.window_utils import center_on_parent, get_instance, raise_window
+
+_instance: "UpdateDialog | None" = None
 
 
-def show_update_dialog(parent: ctk.CTk, info: UpdateInfo) -> "UpdateDialog":
-    """Створює і показує діалог оновлення."""
-    dialog = UpdateDialog(parent, info)
-    dialog.focus()
-    return dialog
+def show_update_dialog(
+    parent: ctk.CTk, info: UpdateInfo, on_ready_to_exit: Callable[[], None]
+) -> "UpdateDialog":
+    """
+    Створює і показує діалог оновлення (або піднімає вже відкритий).
+
+    РЕГРЕСІЯ D-17: без single-instance повторні автоматичні перевірки (режим `daily`/
+    `weekly`, чи ручна перевірка після автоматичної) складали діалоги стосом один на
+    одному — той самий клас дефекту, що вже виправлений для `settings_window`.
+    """
+    global _instance
+    existing = get_instance(_instance)
+    if existing is not None:
+        raise_window(existing)
+        return existing
+    _instance = UpdateDialog(parent, info, on_ready_to_exit)
+    raise_window(_instance)
+    return _instance
 
 
 class UpdateDialog(ctk.CTkToplevel):
@@ -29,10 +46,11 @@ class UpdateDialog(ctk.CTkToplevel):
 
     _GITHUB_RELEASES_URL = f"https://github.com/{build_info.GITHUB_REPO}/releases"
 
-    def __init__(self, parent: ctk.CTk, info: UpdateInfo) -> None:
+    def __init__(self, parent: ctk.CTk, info: UpdateInfo, on_ready_to_exit: Callable[[], None]) -> None:
         super().__init__(parent)
         self._parent = parent
         self._info = info
+        self._on_ready_to_exit = on_ready_to_exit
         self._downloading = False
 
         self.title(f"Доступне оновлення v{info.version}")
@@ -126,21 +144,30 @@ class UpdateDialog(ctk.CTkToplevel):
         self._set_buttons_state("disabled")
         self._show_progress(True)
         log.info(f"Оновлення до v{self._info.version}")
-        launch_update(root=self._parent, info=self._info, on_progress=self._on_progress)
+        launch_update(
+            info=self._info,
+            on_progress=self._on_progress,
+            on_ready_to_exit=self._on_ready_to_exit,
+        )
 
     def _on_progress(self, pct: int) -> None:
         self.after(0, self._update_progress_ui, pct)
 
     def _update_progress_ui(self, pct: int) -> None:
-        if pct == -1:
+        # Будь-яке від'ємне значення — помилка (див. PROGRESS_* у core/updater.py).
+        # Ловимо саме `pct < 0`, а не `== -1`: інакше новий код помилки мовчки провалиться
+        # у гілку прогресу і лишить діалог назавжди заблокованим.
+        if pct < 0:
             self._show_progress(False)
             self._set_buttons_state("normal")
             self._downloading = False
-            messagebox.showerror(
-                "Помилка оновлення",
-                "Не вдалося завантажити оновлення.\n"
-                "Перевірте з'єднання або завантажте вручну з GitHub.", parent=self,
-            )
+            if pct == PROGRESS_APPLY_FAILED:
+                text = ("Оновлення завантажено, але застосувати його не вдалося.\n"
+                        "Деталі — у logs/. Оновіться вручну з GitHub Releases.")
+            else:
+                text = ("Не вдалося завантажити оновлення.\n"
+                        "Перевірте з'єднання або завантажте вручну з GitHub.")
+            messagebox.showerror("Помилка оновлення", text, parent=self)
         elif pct < 100:
             self._progress_label.configure(text=f"Завантаження... {pct}%")
         else:
@@ -172,11 +199,7 @@ class UpdateDialog(ctk.CTkToplevel):
         self._btn_github.configure(state=state)
 
     def _center_on_parent(self) -> None:
-        self.update_idletasks()
-        dw, dh = 560, 460
-        x = self._parent.winfo_x() + (self._parent.winfo_width() - dw) // 2
-        y = self._parent.winfo_y() + (self._parent.winfo_height() - dh) // 2
-        self.geometry(f"{dw}x{dh}+{x}+{y}")
+        center_on_parent(self, self._parent, 560, 460)
 
     def _on_theme(self, mode: str, palette: dict) -> None:
         # CTk-віджети appearance_mode підхоплюють самі, але фон Toplevel за палітрою
@@ -187,5 +210,7 @@ class UpdateDialog(ctk.CTkToplevel):
             pass  # діалог міг бути вже знищений — не критично
 
     def destroy(self) -> None:
+        global _instance
         unsubscribe(Events.THEME_CHANGED, self._on_theme)
+        _instance = None
         super().destroy()
