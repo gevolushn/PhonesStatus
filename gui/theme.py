@@ -52,14 +52,20 @@ _FADE_ALPHA_DIM: float = 0.75
 
 
 def _get_system_mode() -> str:
-    """Зчитує системну тему Windows (Light/Dark). При помилці — Dark."""
+    """
+    Зчитує системну тему Windows (Light/Dark). При помилці — Dark.
+
+    `with winreg.OpenKey(...)` — не голий виклик: ключ реєстру мусить закриватись, а
+    ця функція кличеться на КОЖНЕ перемикання теми (mode="System"), тож без
+    контекст-менеджера дескриптори тихо накопичувались би на кожен виклик.
+    """
     try:
         import winreg
-        key = winreg.OpenKey(
+        with winreg.OpenKey(
             winreg.HKEY_CURRENT_USER,
             r"SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize",
-        )
-        value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+        ) as key:
+            value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
         return "Light" if value == 1 else "Dark"
     except Exception:
         return "Dark"

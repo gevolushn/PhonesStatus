@@ -5,6 +5,104 @@
 
 ## [Unreleased]
 
+### Added — два незалежні режими джерел даних
+- **Два окремі перемикачі Ручний/Авто** — для FreePBX і для таблиці, незалежні один від
+  одного. Робочі всі чотири комбінації; типовий сценарій — авто-АТС + ручна таблиця.
+- `parsers/pbx_ari.py` — авто-режим АТС через **Asterisk REST Interface**: один запит
+  `GET /endpoints` із Basic-авторизацією, лише `urllib`. Перевірено на бойовій АТС
+  (Asterisk 18.13 / FreePBX 16.0.45): 224 endpoints, HTTP 200. Трункові псевдо-endpoint'и
+  (`SipProvider`, `To_Yeastar`) відсіюються наявним правилом `^\d{3,5}$`. Помилки
+  перекладаються в текст для користувача (401 → логін/пароль, таймаут → bindaddr/фаєрвол).
+  GraphQL/REST самого FreePBX не підходить — він не віддає стан реєстрації.
+- `parsers/pbx_manual.py` — `parse_text_block` переїхав сюди з `xlsx_parser.py` (парсер
+  FreePBX усередині модуля Excel був історичною випадковістю міграції).
+- `parsers/sheets_parser.py` — **заглушка** авто-режиму таблиці з зафіксованою сигнатурою
+  і дослідженим планом реалізації. Google Sheets свідомо лишено на потім; доступ — read-only.
+- `core/dpapi.py` — шифрування секретів через **Windows DPAPI** (`ctypes`, нуль залежностей).
+  Пароль ARI на диску лежить як `dpapi:<base64>`, у пам'яті — відкритим. Ключ прив'язаний
+  до облікового запису Windows: скопійований на інший ПК `settings.json` не розшифрується.
+- `gui/settings_window.py` (з `optional_modules/`) + дві проєктні секції: параметри ARI і
+  розкладка таблиці. `gui/progress.py` — читання таблиці й мережа пішли у фоновий потік.
+- Звіт отримав секції **поза перетином**: «в АТС, немає в таблиці» і «у таблиці, немає в АТС».
+
+### Changed
+- **`compare()` став симетричним**: `compare(table: dict, pbx: dict) -> Comparison`.
+  Обидва джерела дають однаковий контракт `dict[номер, 'ON'|'OFF']`, тому нижче по потоку
+  розгалужень за режимом немає взагалі. Правило «при дублі перемагає OFF» переїхало в
+  `pbx_manual.py` — це артефакт ручного вводу, ARI дублів не дає.
+- **Аркуш і колонки таблиці більше не вшиті в код** — `table_sheet`, `table_col_number`,
+  `table_col_status` у конфігу, редагуються у вікні налаштувань. Дефолти ті самі (F/H).
+  Причина: розкладка вже переїжджала (B → F), і кожен переїзд означав правку коду й реліз.
+- Головне вікно перебудоване на дві панелі-джерела з перемикачем у шапці кожної.
+
+### Fixed
+- **`gui/progress.py` — дефект, успадкований від шаблону 2.5.0.** `except Exception as exc:`
+  разом із `lambda: self._finish(on_error, exc)`: Python наприкінці блоку `except` робить
+  неявний `del exc`, а лямбда виконується пізніше (через `after`) — і падала `NameError`
+  замість виклику обробника. Тобто гілка помилки в `BackgroundTask` не працювала **ніколи**.
+  Виправлено прив'язкою значенням (`lambda e=exc:`); повідомлено як дефект шаблону.
+
+### Notes
+- Нових pip-залежностей немає: ARI і DPAPI — на `urllib` і `ctypes` зі stdlib.
+- `CONFIG_VERSION` **не** підвищувався: додавання нових ключів покриває
+  `{**DEFAULT, **loaded}`, а бамп потрібен лише при перейменуванні чи зміні типу.
+- Автовизначення аркуша на робочому файлі не спрацьовує («Copy of Телефони…» відпадає за
+  виключенням `copy of`) — рятує фолбек на активний аркуш. Саме тому з'явився явний вибір.
+
+### Changed — ядро синхронізовано з шаблоном `2.3.2` → `2.5.0`
+- `core/paths.py` — третій корінь `writable_root()` (`app_dir` → `%LOCALAPPDATA%\PhonesStatus`
+  → `%TEMP%\PhonesStatus`) і `resource_dir()` для вшитих ресурсів. `logs_dir()`/`data_dir()`
+  рахуються від `writable_root()`, `assets_dir()` — від `resource_dir()`.
+- `core/config_manager.py` — константа `CONFIG_FILE` замінена функцією `config_path()`
+  (заморожений на імпорті шлях і свіжий `makedirs` могли вказувати в різні місця).
+  `CONFIG_VERSION` 1 → 2: `check_updates` (bool) → `update_check` (рядок) + `last_update_check`,
+  з робочою міграцією `_migrate_1_to_2`.
+- `core/build_info.py` — `GITHUB_TOKEN` виведено у `core/_build_secrets.py` (gitignored);
+  `APP_MUTEX` більше не містить `Global\` — простір імен додає `instance_lock`.
+- `core/instance_lock.py` — mutex у `Local\` за замовчуванням. `Global\` потребує
+  `SeCreateGlobalPrivilege`, якого немає у звичайного користувача, і захист від другої
+  копії вимикався **мовчки** для всіх без адмінських прав.
+- `core/updater.py` — `launch_update` більше не приймає `root`; замість
+  `root.after(0, root.destroy)` — колбек `on_ready_to_exit` (штатний вихід зі збереженням
+  конфігу). Додано `should_check_now()`/`mark_checked()` і коди `PROGRESS_*`.
+- `core/events.py` — `_listeners` під `threading.RLock`; контракт «emit виконує підписників
+  синхронно в потоці викликача» задокументований.
+- `core/cleanup.py` — `clean_old_logs()` рахує ДНІ за датою в імені файлу, а не кількість файлів.
+- `gui/app_window.py` — `_on_closing` став ідемпотентним (прапорець `_closing`); новий
+  `_request_shutdown()` як `on_ready_to_exit`; автоперевірка через `should_check_now()`,
+  ручна — `check_updates_now()` з обов'язковим зворотним зв'язком.
+- `gui/widgets.py` — перемикач теми бере підпис із `theme_mgr.current_mode`, а не з
+  параметра події: вибір «⚙ Система» більше не перескакує назад на «🌙 Темна».
+- `optional_modules/` — оновлено до 2.5.0 (додано `core/net_path.py`).
+
+### Added
+- `core/elevation.py` — перевірка й підвищення прав (`is_elevated`, `is_admin_account`,
+  `requires_admin_for`, `relaunch_as_admin`, `run_elevated`), лише `ctypes`.
+- `gui/window_utils.py` — `center_on_parent`, `raise_window`, `get_instance`,
+  `clamp_to_screen`, `reset_entry` (шаблон винаходив це тричі, щоразу з тим самим дефектом).
+- `core/_build_secrets.py.example` — шаблон файлу секретів.
+
+### Fixed — дефекти, успадковані від шаблону ≤ 2.3.2
+- **Portable `.exe` не запускався з теки без прав на запис.** `core/logger.py` робить
+  `makedirs(logs_dir())` уже на імпорті — раніше за `install_crash_handler()`, тож падіння
+  не лишало ні лога, ні `crash_*.log`, а `--noconsole` робив помилку невидимою.
+- **Вшиті ресурси не знаходились у onefile-збірці** — акцентна тема тихо падала на CTk
+  `"blue"`, `updater.exe` не витягувався (тобто автооновлення не працювало взагалі).
+- **`assets/themes/neutral.json`** — `CTkButton.hover_color[0]` містив `#48566280`:
+  вісім hex-цифр (RGBA), формату, якого в Tk не існує. Дефект спав, доки не перемкнути
+  тему на **світлу** — тоді `TclError` на кожне наведення миші на будь-яку кнопку.
+- **`.gitignore`** — `core/_build_dist.py` не ігнорувався взагалі: inline-коментар у тому
+  самому рядку ставав частиною патерну (git про це не попереджає). Перевірено
+  `git check-ignore -v`. Наш фікс `/temp/` і `/exports/` шаблон уже прийняв до себе.
+- **Самооновлення могло лишити без програми** — `sys.exit(1)` стояв перед гілкою рестарту:
+  при провалі заміни бекап відновлювався, але відновлену версію ніхто не запускав.
+  `_WAIT_TIMEOUT_SEC` 15 → 60.
+
+### Notes
+- `TEMPLATE_VERSION` = `2.5.0`. Свідомі відхилення від skeleton — у `CLAUDE.md`.
+- Алгоритми `parsers/` і формат звіту **не змінювались**: `read_xlsx` на робочій таблиці
+  дає ті самі 221 номер, правила `parse_text_block` і `compare` збережені.
+
 ## [1.1.1] — 2026-08-07
 ### Fixed
 - `parsers/xlsx_parser.py` — внутрішній номер читається з **колонки F** («Внутрішній»)

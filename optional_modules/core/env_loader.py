@@ -1,16 +1,22 @@
 """
 env_loader.py — читання .env для dev-налаштувань. ОПЦІЙНИЙ модуль.
 
-Дозволяє тестувати з іншим GITHUB_REPO або вимкнути автооновлення при розробці,
-не міняючи build_info.py. У .exe (frozen) .env НЕ читається ніколи — секрети фізично
-не потрапляють у бінарник.
+Кладе значення з .env у os.environ (setdefault, не перезаписує вже встановлені змінні
+процесу). У .exe (frozen) .env НЕ читається ніколи — секрети фізично не потрапляють у
+бінарник.
+
+⚠️ Сам по собі цей модуль нічого не змінює в поведінці програми: він лише наповнює
+os.environ. Щоб .env реально на щось впливав (інший GITHUB_REPO при розробці, інший
+рівень логування тощо), відповідний код має явно ЧИТАТИ потрібну змінну з os.environ —
+типово в build_info.py:
+    GITHUB_REPO: str = os.environ.get("GITHUB_REPO", "username/MyAppName")
+Без такого читання значення з .env просто лежать у os.environ незатребувані.
 
 Підключення: скопіювати у core/, викликати в main.py САМИМ ПЕРШИМ, до інших імпортів:
     from core.env_loader import load_env
     load_env()
 
 .env (додати у .gitignore):
-    CHECK_UPDATES=false
     GITHUB_REPO=myname/MyApp-dev
     LOG_LEVEL=DEBUG
 """

@@ -144,7 +144,30 @@ class HealthChecker:
 
     @staticmethod
     def _check_path(res: Resource) -> bool:
-        return os.path.exists(res.target) and os.access(res.target, os.W_OK)
+        """
+        Існування + запис — ПРОБНИМ ФАЙЛОМ, не os.access(W_OK).
+
+        os.access на Windows дивиться лише на атрибут «тільки читання» і нічого не
+        знає ні про ACL, ні про права на мережевому ресурсі — рапортує «доступно» там,
+        де перший же запис впаде. Якщо target — файл, а не тека, пробний запис іде в
+        його батьківську теку (перезаписувати довільний існуючий файл заради перевірки
+        небезпечно).
+        """
+        if not os.path.exists(res.target):
+            return False
+        directory = res.target if os.path.isdir(res.target) else os.path.dirname(res.target)
+        probe = os.path.join(directory or ".", f".health_probe_{os.getpid()}")
+        try:
+            with open(probe, "w", encoding="utf-8"):
+                pass
+        except OSError:
+            return False
+        finally:
+            try:
+                os.remove(probe)
+            except OSError:
+                pass
+        return True
 
     @staticmethod
     def _check_port(res: Resource) -> bool:

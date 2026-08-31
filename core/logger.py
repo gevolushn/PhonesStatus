@@ -110,22 +110,57 @@ def _install_excepthook(logger: logging.Logger) -> None:
     threading.excepthook = _thread_hook
 
 
+_FILE_HANDLER_ERROR: str | None = None
+
+
+def file_handler_error() -> str | None:
+    """
+    Чому лог-файл недоступний (None — усе гаразд).
+
+    main() показує це одразу після банера. Логер — службовий модуль: він не має права
+    вбивати програму через власну проблему, але й мовчати про неї не може.
+    """
+    return _FILE_HANDLER_ERROR
+
+
+def _add_file_handler(logger: logging.Logger, fmt: str) -> None:
+    """
+    Додає файловий хендлер «за можливості».
+
+    Раніше і makedirs, і FileHandler виконувались без захисту — а оскільки логер працює
+    вже НА ІМПОРТІ (log = setup_logger() унизу файлу), падіння траплялось ДО
+    install_crash_handler() у main(). Наслідок: portable-.exe у теці без прав на запис
+    показував голий трейсбек PyInstaller замість вікна — ні лог-файлу, ні crash-звіту.
+    Корінь проблеми знімає paths.writable_root(); це — страховка на випадок, коли не
+    пишеться взагалі нікуди.
+    """
+    global _FILE_HANDLER_ERROR
+    try:
+        logs_dir = _logs_dir()
+        os.makedirs(logs_dir, exist_ok=True)
+        today = datetime.now().strftime("%Y-%m-%d")
+        fh = logging.FileHandler(os.path.join(logs_dir, f"app_{today}.log"), encoding="utf-8")
+        fh.setFormatter(logging.Formatter(fmt, datefmt="%H:%M:%S"))
+        logger.addHandler(fh)
+    except Exception as exc:
+        _FILE_HANDLER_ERROR = (
+            f"Лог-файл недоступний ({exc.__class__.__name__}: {exc}). "
+            f"Логи цієї сесії нікуди не пишуться."
+        )
+        # NullHandler, а не порожній список: інакше logging вмикає lastResort, який пише
+        # в sys.stderr — а той нижче підміняється проксі в цей самий логер (рекурсія).
+        logger.addHandler(logging.NullHandler())
+
+
 def setup_logger() -> logging.Logger:
     """Налаштовує і повертає синглтон-логер 'AppLogger'. Повторний виклик — той самий логер."""
-    logs_dir = _logs_dir()
-    os.makedirs(logs_dir, exist_ok=True)
-    today = datetime.now().strftime("%Y-%m-%d")
-    log_file = os.path.join(logs_dir, f"app_{today}.log")
-    fmt = "%(asctime)s [%(levelname)s] %(message)s"
-
     logger = logging.getLogger("AppLogger")
     if logger.handlers:
         return logger
     logger.setLevel(logging.INFO)
+    fmt = "%(asctime)s [%(levelname)s] %(message)s"
 
-    fh = logging.FileHandler(log_file, encoding="utf-8")
-    fh.setFormatter(logging.Formatter(fmt, datefmt="%H:%M:%S"))
-    logger.addHandler(fh)
+    _add_file_handler(logger, fmt)
 
     # Консоль — тільки при розробці (не .exe). Пишемо в ОРИГІНАЛЬНИЙ stderr
     # (sys.__stderr__), щоб після підміни sys.stderr нижче не виникло рекурсії.

@@ -30,6 +30,22 @@ APP_VERSION = _read_const("APP_VERSION")
 _icon = os.path.join("assets", "icons", "app.ico")
 _icon = _icon if os.path.isfile(_icon) else None
 
+# updater.exe — НЕ версіонується в репо шаблону (assets/updater/README.txt), тож перша
+# збірка нового проєкту падає, якщо його не зібрати заздалегідь (docs/CHECKLIST.md §1).
+# Без цієї перевірки помилка — низькорівневе повідомлення PyInstaller про datas=[...],
+# яке нічого не пояснює новачку.
+_updater_exe = os.path.join("assets", "updater", "updater.exe")
+if not os.path.isfile(_updater_exe):
+    raise SystemExit(
+        f"\nПОМИЛКА: '{_updater_exe}' відсутній.\n"
+        f"Portable-збірка вимагає вшитий updater.exe (автооновлення). Зібрати один раз:\n"
+        f"  cd assets/updater\n"
+        f"  pyinstaller --onefile --noconsole --name updater updater_src.py\n"
+        f"  copy dist\\updater.exe updater.exe\n"
+        f"  rmdir /s /q dist build __pycache__ && del updater.spec\n"
+        f"Деталі — docs/CHECKLIST.md §1, assets/updater/README.txt.\n"
+    )
+
 block_cipher = None
 
 a = Analysis(
@@ -62,7 +78,11 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # upx=False СВІДОМО: пакування — сильний антивірусний тригер, а ця програма ще й
+    # сама себе перезаписує при оновленні (core/updater.py) — два тригери складаються.
+    # Виграш 40-50% розміру не вартий ризику карантину посеред self-update.
+    # Рішення й обґрунтування — docs/DECISIONS.md.
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,          # GUI-програма — без консолі

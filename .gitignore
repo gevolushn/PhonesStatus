@@ -1,17 +1,37 @@
+# ⚠️ ПРАВИЛА .gitignore, на яких найлегше обпектися:
+#   1. Коментар МОЖЕ бути тільки на власному рядку. Текст після патерну в тому ж рядку
+#      стає частиною патерну — правило мовчки перестає працювати (git не попереджає).
+#   2. Патерн БЕЗ слеша всередині діє на БУДЬ-ЯКОМУ рівні: `temp/` вимкне і `assets/temp/`.
+#      Щоб обмежити коренем проєкту — ставити провідний слеш: `/temp/`.
+#      Патерн зі слешем усередині (`data/settings.json`) уже прив'язаний до цієї теки.
+#   3. Перед першим комітом переглянути `git status` очима — не покладатись на цей файл.
+
 # ── Build-generated (НЕ версіонувати) ──
-core/_build_dist.py          # тип дистрибуції; пишеться spec при freeze
+# core/_build_dist.py — тип дистрибуції; пишеться spec при freeze
+core/_build_dist.py
 build/
 dist/
 *.manifest
 
-# PyInstaller-артефакти збірки updater.exe (сам updater.exe — версіонується!)
+# ── Секрети / сесії (НІКОЛИ не версіонувати) ──
+# core/_build_secrets.py.example — версіюється НАВМИСНО (шаблон без реального токена).
+# Сам core/_build_secrets.py — ні: токен, що потрапив у git-історію, звідти вже не
+# прибирається, лише відкликається. Рядки нижче — типові для програм із логіном/API-ключами.
+core/_build_secrets.py
+*.session
+*.token
+credentials.json
+*.pem
+*.key
+
+# PyInstaller-артефакти збірки updater.exe
+# (сам assets/updater/updater.exe — ВЕРСІОНУЄТЬСЯ у вашому проєкті;
+#  у репо шаблону його немає навмисно — див. assets/updater/README.txt)
 assets/updater/build/
 assets/updater/dist/
 assets/updater/updater.spec
 
 # ── Дані часу виконання ──
-# ⚠️ Провідний слеш обов'язковий: шаблон БЕЗ нього діє на будь-якому рівні вкладеності
-# (`temp/` викинув би і `assets/temp/`, і будь-яку іншу вкладену теку з такою назвою).
 logs/*.log
 data/settings.json
 data/settings.json.tmp

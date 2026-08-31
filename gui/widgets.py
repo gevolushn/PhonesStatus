@@ -100,13 +100,40 @@ class InputPanel(NamedTuple):
     textbox: ctk.CTkTextbox
 
 
-class ControlBar(NamedTuple):
-    """Рядок керування: шлях до таблиці + кнопки «Огляд…» і «Порівняти»."""
+class SourcePanel(NamedTuple):
+    """
+    Панель одного джерела даних із власним перемикачем Ручний/Авто.
+
+    `body` — порожній контейнер, який наповнює викликач: два різні набори віджетів
+    (ручний і авто) створюються один раз і показуються/ховаються через grid/grid_remove,
+    а не перестворюються на кожне перемикання.
+    """
+    frame:  ctk.CTkFrame
+    title:  ctk.CTkLabel
+    switch: ctk.CTkSegmentedButton
+    body:   ctk.CTkFrame
+
+
+class TableManualBody(NamedTuple):
+    """Ручний режим таблиці: шлях до .xlsx + «Огляд…» + підказка про розкладку."""
     frame:      ctk.CTkFrame
-    label:      ctk.CTkLabel
     entry:      ctk.CTkEntry
     btn_browse: ctk.CTkButton
-    btn_run:    ctk.CTkButton
+    hint:       ctk.CTkLabel
+
+
+class AutoBody(NamedTuple):
+    """Авто-режим будь-якого джерела: рядок цілі + рядок стану останнього запиту."""
+    frame:  ctk.CTkFrame
+    target: ctk.CTkLabel
+    status: ctk.CTkLabel
+
+
+class ActionBar(NamedTuple):
+    """Рядок дій: «Порівняти» + «Налаштування»."""
+    frame:        ctk.CTkFrame
+    btn_run:      ctk.CTkButton
+    btn_settings: ctk.CTkButton
 
 
 class ResultPanel(NamedTuple):
@@ -191,38 +218,128 @@ def build_input_panel(
     return InputPanel(frame=frame, title=title, clear=clear, textbox=textbox)
 
 
-def build_control_bar(
+MODE_MANUAL: str = "Ручний"
+MODE_AUTO: str = "Авто"
+_MODE_TO_KEY: dict[str, str] = {MODE_MANUAL: "manual", MODE_AUTO: "auto"}
+_KEY_TO_MODE: dict[str, str] = {v: k for k, v in _MODE_TO_KEY.items()}
+
+
+def mode_key(label: str) -> str:
+    """Підпис перемикача -> значення для конфігу ("manual"/"auto")."""
+    return _MODE_TO_KEY.get(label, "manual")
+
+
+def mode_label(key: str) -> str:
+    """Значення з конфігу -> підпис перемикача."""
+    return _KEY_TO_MODE.get(key, MODE_MANUAL)
+
+
+def build_source_panel(
+    parent: ctk.CTkBaseClass,
+    *,
+    title_text: str,
+    accent_key: str,
+    current_mode: str,
+    on_mode_change: Callable[[str], None],
+) -> SourcePanel:
+    """
+    Панель джерела: заголовок + перемикач Ручний/Авто у шапці, порожнє тіло під ним.
+
+    Перемикачі двох панелей НЕЗАЛЕЖНІ - свідомо: типовий робочий сценарій це
+    авто-АТС + ручна таблиця, поки Google Sheets не підключений.
+    """
+    frame = make_frame(parent)
+    frame.grid_columnconfigure(0, weight=1)
+    frame.grid_rowconfigure(1, weight=1)
+
+    head = ctk.CTkFrame(frame, fg_color="transparent")
+    head.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 4))
+    head.grid_columnconfigure(0, weight=1)
+
+    title = ctk.CTkLabel(
+        head, text=title_text,
+        font=ctk.CTkFont(family=_FONT_UI[0], size=13, weight="bold"), anchor="w",
+        text_color=status_colors(_current_mode())[accent_key],
+    )
+    title.grid(row=0, column=0, sticky="w")
+
+    switch = ctk.CTkSegmentedButton(
+        head, values=[MODE_MANUAL, MODE_AUTO], command=on_mode_change,
+        height=26, font=ctk.CTkFont(family=_FONT_UI[0], size=11), width=150,
+    )
+    switch.set(mode_label(current_mode))
+    switch.grid(row=0, column=1, sticky="e")
+
+    body = ctk.CTkFrame(frame, fg_color="transparent")
+    body.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+    body.grid_columnconfigure(0, weight=1)
+    body.grid_rowconfigure(0, weight=1)
+    return SourcePanel(frame=frame, title=title, switch=switch, body=body)
+
+
+def build_table_manual_body(
     parent: ctk.CTkBaseClass,
     *,
     path_var: ctk.StringVar,
     on_browse: Callable[[], None],
-    on_run: Callable[[], None],
-) -> ControlBar:
-    """Рядок із полем шляху до .xlsx та кнопками дій."""
+) -> TableManualBody:
+    """Тіло ручного режиму таблиці: поле шляху, кнопка огляду, підказка про колонки."""
     frame = ctk.CTkFrame(parent, fg_color="transparent")
-    frame.grid_columnconfigure(1, weight=1)
-
-    label = ctk.CTkLabel(
-        frame, text="Таблиця Excel:",
-        font=ctk.CTkFont(family=_FONT_UI[0], size=13), anchor="w",
-    )
-    label.grid(row=0, column=0, sticky="w", padx=(0, 10))
+    frame.grid_columnconfigure(0, weight=1)
 
     entry = make_entry(frame, textvariable=path_var, height=32)
-    entry.grid(row=0, column=1, sticky="ew", padx=(0, 10))
+    entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
 
-    btn_browse = make_button(frame, "Огляд…", command=on_browse, width=100, height=32)
-    btn_browse.grid(row=0, column=2, padx=(0, 10))
+    btn_browse = make_button(frame, "Огляд...", command=on_browse, width=100, height=32)
+    btn_browse.grid(row=0, column=1)
+
+    hint = ctk.CTkLabel(
+        frame, text="", anchor="w", justify="left",
+        font=ctk.CTkFont(family=_FONT_UI[0], size=11),
+    )
+    hint.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+    return TableManualBody(frame=frame, entry=entry, btn_browse=btn_browse, hint=hint)
+
+
+def build_auto_body(parent: ctk.CTkBaseClass) -> AutoBody:
+    """Тіло авто-режиму: куди ходимо і що відповіло минулого разу."""
+    frame = ctk.CTkFrame(parent, fg_color="transparent")
+    frame.grid_columnconfigure(0, weight=1)
+
+    target = ctk.CTkLabel(
+        frame, text="", anchor="w", justify="left",
+        font=ctk.CTkFont(family=_FONT_MONO, size=11),
+    )
+    target.grid(row=0, column=0, sticky="ew")
+
+    status = ctk.CTkLabel(
+        frame, text="", anchor="w", justify="left", wraplength=380,
+        font=ctk.CTkFont(family=_FONT_UI[0], size=11),
+    )
+    status.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+    return AutoBody(frame=frame, target=target, status=status)
+
+
+def build_action_bar(
+    parent: ctk.CTkBaseClass,
+    *,
+    on_run: Callable[[], None],
+    on_settings: Callable[[], None],
+) -> ActionBar:
+    """Рядок дій під панелями джерел."""
+    frame = ctk.CTkFrame(parent, fg_color="transparent")
+    frame.grid_columnconfigure(0, weight=1)
+
+    btn_settings = make_button(
+        frame, "⚙  Налаштування", command=on_settings, width=170, height=32)
+    btn_settings.grid(row=0, column=0, sticky="w")
 
     btn_run = ctk.CTkButton(
-        frame, text="▶  Порівняти", command=on_run, width=150, height=32,
+        frame, text="▶  Порівняти", command=on_run, width=170, height=32,
         font=ctk.CTkFont(family=_FONT_UI[0], size=13, weight="bold"), **_BTN_BLUE,
     )
-    btn_run.grid(row=0, column=3)
-    return ControlBar(
-        frame=frame, label=label, entry=entry,
-        btn_browse=btn_browse, btn_run=btn_run,
-    )
+    btn_run.grid(row=0, column=1, sticky="e")
+    return ActionBar(frame=frame, btn_run=btn_run, btn_settings=btn_settings)
 
 
 def build_result_panel(parent: ctk.CTkBaseClass) -> ResultPanel:
@@ -274,7 +391,7 @@ def build_footer(
 
 def build_theme_switcher(
     parent: ctk.CTkBaseClass,
-    on_change: callable,
+    on_change: Callable[[str], None],
     current_mode: str = "Dark",
 ) -> ctk.CTkOptionMenu:
     """Компактний перемикач теми. Синхронізується через Event Bus."""
@@ -292,7 +409,14 @@ def build_theme_switcher(
     )
 
     def _on_theme_changed(mode: str, palette: dict) -> None:
-        new_label = _MODE_LABELS.get(mode)
+        # РЕГРЕСІЯ D-15: підпис НЕ можна брати з параметра mode цієї події.
+        # theme.py emit-ить resolved_mode (System резолвиться в Light/Dark) — саме
+        # тому, що підписники (палітра тощо) не мають думати про System. Але це та
+        # сама подія, на яку підписаний і сам перемикач: узявши з неї mode, він
+        # миттєво перемикав власний підпис «Система» назад на «Темна» при виборі.
+        # theme_mgr.current_mode — єдине місце, де "System" лишається "System".
+        from gui.theme import theme_mgr
+        new_label = _MODE_LABELS.get(theme_mgr.current_mode)
         if new_label and var.get() != new_label:
             var.set(new_label)
 

@@ -15,10 +15,20 @@ events.py — легковагий Event Bus для міжмодульної к�
     - Помилки у колбеках логуються, але не переривають інші колбеки.
     - Підписники тримаються СЛАБКО (WeakMethod): коли власник зник — підписка
       прибирається сама. Тому підписувати треба МЕТОДИ (self._on_theme), не голі лямбди.
+
+⚠️ Контракт потоків. `emit()` викликає підписників СИНХРОННО в потоці ВИКЛИКАЧА, не в
+окремому потоці й не в GUI-потоці автоматично. `core/health.py` і `core/crash_reporter.py`
+можуть emit-ити з фонового потоку — підписник, що чіпає Tkinter/CTk, зобов'язаний сам
+загорнути свою реакцію в `root.after(0, ...)`, інакше отримає крос-потоковий доступ до
+GUI (той самий клас багів, що вже виправлений у `core.updater` через `on_ready_to_exit`).
+`_listeners` захищений `threading.RLock` від паралельних subscribe/unsubscribe/emit — але
+самі колбеки викликаються ПОЗА локом, щоб підписник, який усередині себе робить
+subscribe/unsubscribe (навіть на цей самий Event Bus), не зловив дедлок.
 """
 from __future__ import annotations
 
 import logging
+import threading
 import weakref
 from collections import defaultdict
 from typing import Callable
@@ -41,6 +51,7 @@ class Events:
 
 # Кожен елемент — weakref-обгортка над колбеком (WeakMethod або weakref.ref)
 _listeners: dict[str, list] = defaultdict(list)
+_lock = threading.RLock()   # RLock: підписник може викликати subscribe/unsubscribe зсередини
 log = logging.getLogger("AppLogger")
 
 
@@ -65,31 +76,37 @@ def subscribe(event: str, callback: Callable) -> None:
             f"subscribe('{event}'): передано голу лямбду — слабке посилання збере її "
             f"одразу. Підписуй self._метод або тримай посилання на названу функцію."
         )
-    refs = _listeners[event]
-    if not any(r() == callback for r in refs):
-        refs.append(_wrap(callback))
+    with _lock:
+        refs = _listeners[event]
+        if not any(r() == callback for r in refs):
+            refs.append(_wrap(callback))
 
 
 def unsubscribe(event: str, callback: Callable) -> None:
     """Знімає підписку. Безпечно викликати навіть якщо підписки вже немає."""
-    refs = _listeners.get(event)
-    if not refs:
-        return
-    _listeners[event] = [r for r in refs if r() is not None and r() != callback]
+    with _lock:
+        refs = _listeners.get(event)
+        if not refs:
+            return
+        _listeners[event] = [r for r in refs if r() is not None and r() != callback]
 
 
 def emit(event: str, **kwargs) -> None:
     """
-    Викликає всіх живих підписників події. Мертві (власник зник) — прибирає.
+    Викликає всіх живих підписників події СИНХРОННО в потоці викликача.
 
-    Ітеруємо КОПІЮ списку, тому підписка/відписка всередині колбека безпечна.
-    Перезбираємо список лише якщо знайшли мертві посилання.
+    Знімок списку підписників береться під локом (консистентність при паралельному
+    subscribe/unsubscribe), але самі колбеки викликаються ПОЗА локом — інакше підписник,
+    що зсередини робить subscribe/unsubscribe/emit, міг би застрягти. Мертві (власник
+    зібраний GC) прибираються окремим проходом під локом після виклику колбеків.
     """
-    refs = _listeners.get(event)
+    with _lock:
+        refs = list(_listeners.get(event, ()))
     if not refs:
         return
+
     dead = []
-    for ref in list(refs):
+    for ref in refs:
         cb = ref()
         if cb is None:          # власник зібраний GC
             dead.append(ref)
@@ -98,18 +115,25 @@ def emit(event: str, **kwargs) -> None:
             cb(**kwargs)
         except Exception as exc:
             log.error(f"Помилка у підписнику '{event}' ({cb!r}): {exc}", exc_info=True)
+
     if dead:
-        _listeners[event] = [r for r in refs if r not in dead]
+        with _lock:
+            current = _listeners.get(event)
+            if current:
+                _listeners[event] = [r for r in current if r not in dead]
 
 
 def clear(event: str | None = None) -> None:
     """Очищає підписки однієї події або всіх (event=None)."""
-    if event is None:
-        _listeners.clear()
-    else:
-        _listeners[event].clear()
+    with _lock:
+        if event is None:
+            _listeners.clear()
+        else:
+            _listeners[event].clear()
 
 
 def listeners_count(event: str) -> int:
     """Кількість ЖИВИХ підписників події (для діагностики/тестів)."""
-    return sum(1 for r in _listeners.get(event, []) if r() is not None)
+    with _lock:
+        refs = list(_listeners.get(event, ()))
+    return sum(1 for r in refs if r() is not None)

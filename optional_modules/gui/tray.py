@@ -26,7 +26,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 from core.logger import log
-from core.paths import app_dir
+from core.paths import assets_dir
 
 
 class TrayIcon:
@@ -44,7 +44,9 @@ class TrayIcon:
         self._app_name = app_name
         self._on_quit = on_quit
         self._menu_extra = menu_extra or []
-        self._icon_path = icon_path or os.path.join(app_dir(), "assets", "icons", "icon.png")
+        # assets/ — вшита в .exe, шлях лише через assets_dir() (від resource_dir, не app_dir):
+        # ручне склеювання app_dir()+"assets" ламало іконку в onefile-збірці.
+        self._icon_path = icon_path or os.path.join(assets_dir(), "icons", "icon.png")
         self._icon: pystray.Icon | None = None
         self._thread: threading.Thread | None = None
 

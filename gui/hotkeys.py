@@ -36,6 +36,9 @@ def handle_key(event: tk.Event) -> str | None:
         elif action == "undo":
             widget.event_generate("<<Undo>>")
     except Exception:
+        # Не кожен віджет підтримує кожну дію (напр. <<Undo>> на readonly-полі чи
+        # tag_add на віджеті без tag_add) — тиха відмова тут безпечніша за краш
+        # обробки клавіш через одну непідтримувану комбінацію.
         pass
     return "break"
 
