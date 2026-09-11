@@ -22,6 +22,10 @@ from core.paths import data_dir as _data_dir
 # зміна типу значення) — не значення. НЕ прив'язувати до APP_VERSION: конфіг і
 # програма версіонуються незалежно.
 CONFIG_VERSION: int = 2
+# ⚠️ 1.3.0 додала шість ключів (MikroTik, Google OAuth, колонки MAC/IP) і НЕ підвищила
+# версію — свідомо. Міграція потрібна там, де старе значення треба ПЕРЕТВОРИТИ; нові
+# ключі з дефолтами підхоплює `{**DEFAULT_CONFIG, **loaded}` у load_config. Порожня
+# міграція лише створила б видимість роботи.
 
 
 def config_path() -> str:
@@ -67,13 +71,40 @@ DEFAULT_CONFIG: dict = {
     "table_sheet":       "",         # назва аркуша; порожньо → автовизначення за «телефон»
     "table_col_number":  "F",        # колонка внутрішнього номера
     "table_col_status":  "H",        # колонка статусу (ON/OFF)
+    # Колонки MAC та IP (1.3.0) — дефолту НЕМАЄ навмисно, на відміну від номера й статусу.
+    # Ті дві читаються, і вигаданий дефолт щонайгірше дасть порожній результат. Колонка IP
+    # ЗАПИСУЄТЬСЯ: дефолт «навмання» затер би чужі дані в спільній робочій таблиці.
+    # Порожньо → функція вважається неналаштованою, кнопки заблоковані.
+    "table_col_mac":     "",         # колонка MAC-адреси телефона
+    "table_col_ip":      "",         # колонка, КУДИ пишемо знайдений IP
     # Google Sheets (auto-режим таблиці)
     "sheet_url":         "",         # посилання з адресного рядка браузера
     "sheet_api_key":     "",         # ← SECRET_FIELDS: на диску лежить як dpapi:<base64>
+    # MikroTik (1.3.0) — IP телефонів із DHCP-lease роутера
+    "mikrotik_url":      "",         # ⚠️ З ПОРТОМ: https://192.168.0.1:8443 (REST на www-ssl)
+    "mikrotik_user":     "",         # окремий read-only користувач, не admin
+    "mikrotik_password": "",         # ← SECRET_FIELDS
+    # Google OAuth (1.3.0) — запис IP у таблицю. Усі три ставляться кнопками в
+    # налаштуваннях і вручну не редагуються.
+    "google_client_id":     "",      # ← SECRET_FIELDS; з client_secret.json
+    "google_client_secret": "",      # ← SECRET_FIELDS; з client_secret.json
+    "google_oauth_refresh_token": "",  # ← SECRET_FIELDS; з кнопки «Авторизувати Google»
 }
 
 # Поля, які на диску зберігаються зашифрованими (див. core/dpapi.py).
-SECRET_FIELDS: tuple[str, ...] = ("ari_password", "sheet_api_key")
+#
+# ⚠️ google_client_id технічно не таємниця (це публічний ідентифікатор клієнта), але
+# лежить тут навмисно: пара id+secret має жити й помирати разом. Якщо конфіг перенесуть
+# на іншу машину, DPAPI очистить secret — і без цього рядка лишився б id без пари,
+# а помилка виглядала б як «Google не впізнав клієнта» замість «завантажте JSON знову».
+SECRET_FIELDS: tuple[str, ...] = (
+    "ari_password",
+    "sheet_api_key",
+    "mikrotik_password",
+    "google_client_id",
+    "google_client_secret",
+    "google_oauth_refresh_token",
+)
 
 
 # ─── Таблиця міграцій ─────────────────────────────────────────────────────────

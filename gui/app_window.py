@@ -33,6 +33,7 @@ from gui.widgets import (
     build_footer,
     build_header,
     build_input_panel,
+    build_ip_panel,
     build_result_panel,
     build_source_panel,
     build_table_manual_body,
@@ -55,6 +56,10 @@ from formatters.result_formatter import (
     build_segments,
     build_status_label,
 )
+from formatters.ip_list import format_ip_list
+from integrations.google_sheets import GoogleAuthError, GoogleSheetsError
+from integrations.ip_sync import Row, resolve_and_list, write_ips
+from integrations.mikrotik import MikrotikError
 
 _DEFAULT_SIZE: tuple[int, int] = (980, 720)
 _MIN_SIZE: tuple[int, int] = (900, 660)
@@ -69,10 +74,19 @@ class AppWindow(ctk.CTk):
         self._last_result_txt = ""
         self._status_tag = "green"          # тег кольору поточного рядка статусу
         self._closing = False               # ідемпотентність _on_closing
+        # Спарсені IP. ⚠️ Ефемерні: живуть до закриття вікна й НІКУДИ не зберігаються —
+        # записана в таблицю адреса протухає за хвилини, і «вчорашній список» ввів би
+        # в оману сильніше, ніж порожнє поле.
+        self._ip_rows: list[Row] | None = None
 
         self.title(build_info.APP_NAME)
         self.minsize(*_MIN_SIZE)
-        self.grid_columnconfigure((0, 1), weight=1)
+        # uniform робить колонки РІВНИМИ незалежно від вмісту. Без нього ширина панелей
+        # джерел залежала від режиму (авто-тіло з лейблами вужче за ручне з полями
+        # вставки), і дві симетричні панелі розходились на 26-54px — тим помітніше,
+        # чим більше режими різняться. Контейнер результатів займає обидві колонки,
+        # тож його власна пропорція 60/40 від uniform не залежить.
+        self.grid_columnconfigure((0, 1), weight=1, uniform="sources")
         self.grid_rowconfigure(1, weight=1)   # панелі джерел
         self.grid_rowconfigure(3, weight=2)   # панель результату
 
@@ -83,7 +97,7 @@ class AppWindow(ctk.CTk):
         self._ctx = AppContextMenu(self)
         editable = [self._online.textbox, self._offline.textbox, self._table_manual.entry]
         bind_to_all(editable, self)
-        self._ctx.bind_all(editable + [self._result.textbox])
+        self._ctx.bind_all(editable + [self._result.textbox, self._ip.textbox])
 
         # Підписка ДО theme_mgr.load(): перший emit одразу застосує палітру до вікна
         subscribe(Events.THEME_CHANGED, self._on_theme_changed)
@@ -125,13 +139,26 @@ class AppWindow(ctk.CTk):
         self._build_table_bodies()
 
         self._actions = build_action_bar(
-            self, on_run=self._run, on_settings=self._open_settings)
+            self, on_run=self._run, on_settings=self._open_settings,
+            on_parse_ips=self._parse_ips, on_write_ips=self._write_ips)
         self._actions.frame.grid(
             row=2, column=0, columnspan=2, sticky="ew", padx=16, pady=10)
 
-        self._result = build_result_panel(self)
-        self._result.frame.grid(
-            row=3, column=0, columnspan=2, sticky="nsew", padx=16, pady=(4, 0))
+        # Рядок результату: звіт ліворуч, IP праворуч, у пропорції 60/40.
+        # ⚠️ Власний контейнер, а не колонки самого вікна: ті ділять простір ще й між
+        # панелями джерел угорі, а ті мають лишатись РІВНИМИ. Пропорція потрібна лише
+        # тут, тож і живе вона тут.
+        results = ctk.CTkFrame(self, fg_color="transparent")
+        results.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=16, pady=(4, 0))
+        results.grid_rowconfigure(0, weight=1)
+        results.grid_columnconfigure(0, weight=3)
+        results.grid_columnconfigure(1, weight=2)
+
+        self._result = build_result_panel(results)
+        self._result.frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+
+        self._ip = build_ip_panel(results)
+        self._ip.frame.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
 
         self._footer = build_footer(
             self,
@@ -215,6 +242,7 @@ class AppWindow(ctk.CTk):
             self._table_auto.status.configure(text="Готово до запиту.")
 
         self._update_table_hint()
+        self._update_ip_controls()
 
     def _update_table_hint(self) -> None:
         """Показує під полем шляху, який аркуш і колонки будуть використані."""
@@ -284,8 +312,12 @@ class AppWindow(ctk.CTk):
             auto.status.configure(text_color=palette["text_dim"])
 
         self._actions.btn_settings.configure(fg_color=palette["frame_top"])
+        self._actions.btn_parse.configure(fg_color=palette["frame_top"])
+        self._actions.btn_write.configure(fg_color=palette["frame_top"])
         self._result.textbox.configure(fg_color=palette["entry_bg"])
         self._result.status.configure(text_color=colors[self._status_tag])
+        self._ip.textbox.configure(fg_color=palette["entry_bg"])
+        self._ip.status.configure(text_color=palette["text_dim"])
         self._footer.btn_save.configure(fg_color=palette["frame_top"])
 
         self._apply_result_tags(mode, palette)
@@ -404,6 +436,7 @@ class AppWindow(ctk.CTk):
             return
 
         config = dict(self._config)   # знімок: фоновий потік не читає живий конфіг
+        with_ips = bool(self._actions.ip_var.get())
 
         def work():
             if table_auto:
@@ -423,16 +456,37 @@ class AppWindow(ctk.CTk):
             else:
                 pbx = read_manual(online_text, offline_text)
 
-            return compare(table, pbx), pbx_auto
+            # ⚠️ Збої ІЗОЛЬОВАНІ. Галочка запускає другу, незалежну мережеву операцію,
+            # і недоступний роутер не має права загасити готовий звіт порівняння —
+            # інакше одна вимкнена галузь мережі позбавляла б користувача основної
+            # функції програми. Помилка їде окремим полем і показується окремо.
+            ip_rows, ip_error = None, None
+            if with_ips:
+                try:
+                    ip_rows = resolve_and_list(config)
+                except Exception as exc:
+                    ip_error = exc
+                    log.error(f"Збір IP під час звірки не вдався: {exc}")
+
+            return compare(table, pbx), pbx_auto, ip_rows, ip_error
 
         BackgroundTask(
             root=self, label="Збираю дані…", btn_lock=[self._actions.btn_run],
         ).run(work=work, on_done=self._on_run_done, on_error=self._on_run_error)
 
     def _on_run_done(self, payload) -> None:
-        """Успіх фонової задачі: (Comparison, чи вичерпні дані АТС)."""
-        result, pbx_complete = payload
+        """Успіх фонової задачі: (Comparison, чи вичерпні дані АТС, рядки IP, збій IP)."""
+        result, pbx_complete, ip_rows, ip_error = payload
         self._show_result(result, pbx_complete)
+
+        # Звіт уже показано — що б не сталося з IP, він лишається на екрані.
+        if ip_rows is not None:
+            self._ip_rows = ip_rows
+            self._show_ip_rows(ip_rows)
+            self._update_ip_controls()
+        elif ip_error is not None:
+            self._on_ip_error(ip_error)
+
         if self._config.get("table_mode", "manual") == "auto":
             self._table_auto.status.configure(
                 text=f"Отримано {result.table_count} номерів "
@@ -477,6 +531,133 @@ class AppWindow(ctk.CTk):
         self._last_result_txt = build_plain_text(result, now, pbx_complete)
         self._footer.btn_save.configure(state="normal")
         log.info(f"Результат відображено. Змін: {len(result.changes)}.")
+
+    # ═══════════════════════════════════════════
+    #  IP З РОУТЕРА  (1.3.0)
+    # ═══════════════════════════════════════════
+
+    def _ip_missing(self) -> str:
+        """
+        Чого бракує для збору IP. Порожній рядок — усе готово.
+
+        Фіча ЗАВЖДИ говорить із Google-таблицею, незалежно від режиму звірки: MAC
+        живуть там навіть тоді, коли статуси вставляються руками.
+        """
+        cfg = self._config
+        if not str(cfg.get("sheet_url", "")).strip():
+            return "не вказано посилання на Google-таблицю"
+        if not str(cfg.get("table_col_mac", "")).strip():
+            return "не вказано колонку MAC"
+        if not str(cfg.get("mikrotik_url", "")).strip() or not str(
+                cfg.get("mikrotik_user", "")).strip():
+            return "не налаштований доступ до MikroTik"
+        if not str(cfg.get("google_oauth_refresh_token", "")).strip():
+            return "немає авторизації Google (запис і читання MAC ідуть через неї)"
+        return ""
+
+    def _update_ip_controls(self) -> None:
+        """Вмикає керування IP лише коли воно справді може спрацювати."""
+        missing = self._ip_missing()
+        ready = not missing
+
+        self._actions.btn_parse.configure(state="normal" if ready else "disabled")
+        self._actions.chk_ip.configure(state="normal" if ready else "disabled")
+        if not ready:
+            # Галочка, яку не можна виконати, не має лишатись увімкненою: інакше
+            # користувач чекав би IP після кожної звірки й не розумів, чому їх немає.
+            self._actions.ip_var.set(False)
+
+        has_column = bool(str(self._config.get("table_col_ip", "")).strip())
+        self._actions.btn_write.configure(
+            state="normal" if (ready and has_column and self._ip_rows) else "disabled")
+
+        if not ready:
+            self._ip.status.configure(text=f"Недоступно: {missing}.")
+        elif self._ip_rows is None:
+            self._ip.status.configure(text="Натисніть «Спарсити IP».")
+
+    def _parse_ips(self) -> None:
+        """«Спарсити IP» — читання без будь-якого запису в таблицю."""
+        missing = self._ip_missing()
+        if missing:
+            messagebox.showwarning("IP недоступні", f"Спершу: {missing}.", parent=self)
+            return
+        config = dict(self._config)      # знімок: фоновий потік не читає живий конфіг
+        BackgroundTask(
+            root=self, label="Питаю роутер…",
+            btn_lock=[self._actions.btn_parse, self._actions.btn_write,
+                      self._actions.btn_run],
+        ).run(
+            work=lambda: resolve_and_list(config),
+            on_done=self._on_ips_ready,
+            on_error=self._on_ip_error,
+        )
+
+    def _on_ips_ready(self, rows: list[Row]) -> None:
+        self._ip_rows = rows
+        self._show_ip_rows(rows)
+        self._update_ip_controls()
+
+    def _show_ip_rows(self, rows: list[Row]) -> None:
+        """Виводить список у поле. Формат — у formatters/ip_list.py, не тут."""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        box = self._ip.textbox
+        box.configure(state="normal")
+        box.delete("1.0", "end")
+        box.insert("end", format_ip_list(rows, now))
+        box.configure(state="disabled")
+
+        found = sum(1 for row in rows if row.ip != "—")
+        self._ip.status.configure(
+            text=f"Знайдено {found} з {len(rows)} ({datetime.now().strftime('%H:%M:%S')}).")
+        log.info(f"IP: показано {len(rows)} рядків, з адресою {found}.")
+
+    def _write_ips(self) -> None:
+        """«Додати в таблицю» — єдине місце, де програма змінює зовнішній документ."""
+        if not self._ip_rows:
+            return
+        if not messagebox.askyesno(
+                "Записати IP у таблицю",
+                f"Записати {len(self._ip_rows)} значень у колонку "
+                f"{self._config.get('table_col_ip', '?')} Google-таблиці?\n\n"
+                "Наявні значення в цій колонці буде замінено.", parent=self):
+            return
+        config = dict(self._config)
+        rows = list(self._ip_rows)
+        BackgroundTask(
+            root=self, label="Пишу в таблицю…",
+            btn_lock=[self._actions.btn_parse, self._actions.btn_write,
+                      self._actions.btn_run],
+        ).run(
+            work=lambda: write_ips(config, rows),
+            on_done=self._on_ips_written,
+            on_error=self._on_ip_error,
+        )
+
+    def _on_ips_written(self, result) -> None:
+        text = f"Записано {result.written} комірок."
+        if result.errors:
+            text += "\n\n" + "\n".join(result.errors)
+        self._ip.status.configure(text=f"Записано {result.written} ({datetime.now():%H:%M:%S}).")
+        messagebox.showinfo("Готово", text, parent=self)
+
+    def _on_ip_error(self, exc: Exception) -> None:
+        """Помилки IP-потоку. Кожен тип має готовий до показу текст."""
+        if isinstance(exc, GoogleAuthError):
+            # Токен могли відкликати — тоді допоможе лише повторна авторизація.
+            log.error(f"Google OAuth: {exc}")
+            title = "Потрібна авторизація Google"
+        elif isinstance(exc, MikrotikError):
+            log.error(f"MikroTik: {exc}")
+            title = "Не вдалося отримати дані з роутера"
+        elif isinstance(exc, GoogleSheetsError):
+            log.error(f"Google Sheets: {exc}")
+            title = "Не вдалося звернутись до таблиці"
+        else:
+            log.error(f"Помилка IP-потоку: {exc}", exc_info=True)
+            title = "Помилка"
+        self._ip.status.configure(text=f"Помилка: {exc}")
+        messagebox.showerror(title, str(exc), parent=self)
 
     def _save_txt(self) -> None:
         """Зберігає останній звіт у .txt."""

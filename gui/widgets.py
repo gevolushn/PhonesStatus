@@ -130,14 +130,26 @@ class AutoBody(NamedTuple):
 
 
 class ActionBar(NamedTuple):
-    """Рядок дій: «Порівняти» + «Налаштування»."""
+    """Рядок дій: «Порівняти», «Налаштування» і група IP (1.3.0)."""
     frame:        ctk.CTkFrame
     btn_run:      ctk.CTkButton
     btn_settings: ctk.CTkButton
+    btn_parse:    ctk.CTkButton
+    btn_write:    ctk.CTkButton
+    chk_ip:       ctk.CTkCheckBox
+    ip_var:       ctk.BooleanVar
 
 
 class ResultPanel(NamedTuple):
     """Панель результату: заголовок, короткий статус і текст звіту (readonly)."""
+    frame:   ctk.CTkFrame
+    title:   ctk.CTkLabel
+    status:  ctk.CTkLabel
+    textbox: ctk.CTkTextbox
+
+
+class IpPanel(NamedTuple):
+    """Панель списку IP (1.3.0) — сусід панелі результату, той самий рядок сітки."""
     frame:   ctk.CTkFrame
     title:   ctk.CTkLabel
     status:  ctk.CTkLabel
@@ -210,8 +222,13 @@ def build_input_panel(
     )
     clear.grid(row=0, column=1, sticky="e")
 
+    # ⚠️ height обов'язковий. Без нього CTkTextbox просить 200px «природної» висоти, а
+    # в ручному режимі FreePBX таких полів ДВА — панель джерел вимагала ~480px і
+    # виштовхувала панель результату за нижню межу вікна, без будь-якого скролу.
+    # В авто-режимі там два лейбли, тому дефект і виглядав як «ручний+ручний ламає вікно».
+    # Поле все одно росте разом із вікном (weight=1) — обмежена лише СТАРТОВА вимога.
     textbox = ctk.CTkTextbox(
-        frame, font=ctk.CTkFont(family=_FONT_MONO, size=12),
+        frame, font=ctk.CTkFont(family=_FONT_MONO, size=12), height=110,
         undo=True, wrap="none", fg_color=palette["entry_bg"],
     )
     textbox.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
@@ -325,21 +342,80 @@ def build_action_bar(
     *,
     on_run: Callable[[], None],
     on_settings: Callable[[], None],
+    on_parse_ips: Callable[[], None],
+    on_write_ips: Callable[[], None],
 ) -> ActionBar:
-    """Рядок дій під панелями джерел."""
+    """
+    Рядок дій під панелями джерел.
+
+    Дії з IP свідомо РОЗНЕСЕНІ на дві кнопки: «Спарсити» лише читає, «Додати в
+    таблицю» змінює спільний зовнішній документ. Одна кнопка «зроби все» означала б,
+    що оператор не завжди знає, у який момент таблиця змінилась.
+    """
     frame = ctk.CTkFrame(parent, fg_color="transparent")
-    frame.grid_columnconfigure(0, weight=1)
+    frame.grid_columnconfigure(1, weight=1)   # порожнє місце між групами
 
     btn_settings = make_button(
         frame, "⚙  Налаштування", command=on_settings, width=170, height=32)
     btn_settings.grid(row=0, column=0, sticky="w")
 
+    ip_var = ctk.BooleanVar(value=False)
+    chk_ip = ctk.CTkCheckBox(
+        frame, text="разом зі звіркою збирати IP", variable=ip_var,
+        font=ctk.CTkFont(family=_FONT_UI[0], size=11), checkbox_width=18, checkbox_height=18,
+    )
+    chk_ip.grid(row=0, column=1, sticky="w", padx=(14, 0))
+
+    btn_parse = make_button(
+        frame, "🌐  Спарсити IP", command=on_parse_ips, width=150, height=32)
+    btn_parse.grid(row=0, column=2, sticky="e", padx=(0, 8))
+
+    btn_write = make_button(
+        frame, "📤  Додати в таблицю", command=on_write_ips, width=180, height=32,
+        state="disabled")
+    btn_write.grid(row=0, column=3, sticky="e", padx=(0, 8))
+
     btn_run = ctk.CTkButton(
         frame, text="▶  Порівняти", command=on_run, width=170, height=32,
         font=ctk.CTkFont(family=_FONT_UI[0], size=13, weight="bold"), **_BTN_BLUE,
     )
-    btn_run.grid(row=0, column=1, sticky="e")
-    return ActionBar(frame=frame, btn_run=btn_run, btn_settings=btn_settings)
+    btn_run.grid(row=0, column=4, sticky="e")
+    return ActionBar(frame=frame, btn_run=btn_run, btn_settings=btn_settings,
+                     btn_parse=btn_parse, btn_write=btn_write,
+                     chk_ip=chk_ip, ip_var=ip_var)
+
+
+def build_ip_panel(parent: ctk.CTkBaseClass) -> IpPanel:
+    """
+    Панель списку IP — та сама конструкція, що й панель результату.
+
+    Вміст ЕФЕМЕРНИЙ: живе в пам'яті вікна до закриття програми й нікуди не
+    зберігається (окремого «останнього списку IP» у конфігу немає навмисно).
+    """
+    palette = _palette()
+    frame = ctk.CTkFrame(parent, fg_color="transparent")
+    frame.grid_columnconfigure(1, weight=1)
+    frame.grid_rowconfigure(1, weight=1)
+
+    title = ctk.CTkLabel(
+        frame, text="🌐  IP телефонів",
+        font=ctk.CTkFont(family=_FONT_UI[0], size=14, weight="bold"), anchor="w",
+    )
+    title.grid(row=0, column=0, sticky="w", pady=(0, 4))
+
+    status = ctk.CTkLabel(
+        frame, text="", font=ctk.CTkFont(family=_FONT_UI[0], size=12), anchor="w",
+    )
+    status.grid(row=0, column=1, sticky="w", padx=(14, 0), pady=(0, 4))
+
+    # Вужча база, ніж у звіту (див. коментар у build_result_panel): список IP має
+    # 44 символи проти 52 і за змістом другорядний — це довідка, а не результат роботи.
+    textbox = ctk.CTkTextbox(
+        frame, font=ctk.CTkFont(family=RESULT_FONT[0], size=RESULT_FONT[1]), width=370,
+        wrap="none", state="disabled", fg_color=palette["entry_bg"],
+    )
+    textbox.grid(row=1, column=0, columnspan=2, sticky="nsew")
+    return IpPanel(frame=frame, title=title, status=status, textbox=textbox)
 
 
 def build_result_panel(parent: ctk.CTkBaseClass) -> ResultPanel:
@@ -360,8 +436,12 @@ def build_result_panel(parent: ctk.CTkBaseClass) -> ResultPanel:
     )
     status.grid(row=0, column=1, sticky="w", padx=(14, 0), pady=(0, 4))
 
+    # ⚠️ width задає БАЗУ для розподілу простору. grid ділить за вагами лише надлишок
+    # понад природний розмір віджетів, а він у обох текстових полів однаковий — тож без
+    # явної бази ваги 3:2 дали б майже 50/50. Звіт має 52 символи Consolas 13, і при
+    # масштабуванні екрана понад 100% половини вікна йому вже не вистачає.
     textbox = ctk.CTkTextbox(
-        frame, font=ctk.CTkFont(family=RESULT_FONT[0], size=RESULT_FONT[1]),
+        frame, font=ctk.CTkFont(family=RESULT_FONT[0], size=RESULT_FONT[1]), width=560,
         wrap="none", state="disabled", fg_color=palette["entry_bg"],
     )
     textbox.grid(row=1, column=0, columnspan=2, sticky="nsew")

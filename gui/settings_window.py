@@ -36,6 +36,7 @@ settings_window.py — вікно налаштувань за замовчува
 from __future__ import annotations
 
 from datetime import datetime
+from tkinter import filedialog, messagebox
 from typing import Callable
 
 import customtkinter as ctk
@@ -44,9 +45,11 @@ from core.events import subscribe, unsubscribe, Events
 from core.logger import log
 from core.updater import UPDATE_CHECK_MODES
 import core.build_info as build_info
+from gui.progress import BackgroundTask
 from gui.theme import theme_mgr
 from gui.widgets import build_theme_switcher
 from gui.window_utils import center_on_parent, get_instance, raise_window
+from integrations.google_sheets import GoogleAuthError, authorize, load_client_json
 
 # Підписи режимів автоперевірки. Порядок у GUI бере core.updater.UPDATE_CHECK_MODES —
 # єдине джерело; тут лише людські назви.
@@ -113,9 +116,11 @@ class SettingsWindow(ctk.CTkToplevel):
 
         self._build_appearance()
         self._build_updates()
-        self._build_pbx()       # проєктна секція
-        self._build_table()     # проєктна секція
-        self._build_sheets()    # проєктна секція
+        self._build_pbx()        # проєктна секція
+        self._build_table()      # проєктна секція
+        self._build_sheets()     # проєктна секція
+        self._build_mikrotik()   # проєктна секція (1.3.0)
+        self._build_google()     # проєктна секція (1.3.0)
         self._build_footer()   # ПОЗА self._body — футер лишається закріпленим
 
         self.bind("<Escape>", lambda _e: self._on_close())
@@ -241,6 +246,12 @@ class SettingsWindow(ctk.CTkToplevel):
             placeholder="порожньо → автовизначення")
         self._col_number = self._field(row=18, label="Колонка номера:", key="table_col_number")
         self._col_status = self._field(row=19, label="Колонка статусу:", key="table_col_status")
+        # Колонки MAC та IP — без дефолту навмисно: у колонку IP програма ПИШЕ,
+        # і значення «навмання» затерло б чужі дані в спільній таблиці.
+        self._col_mac = self._field(
+            row=20, label="Колонка MAC:", key="table_col_mac", placeholder="напр. J")
+        self._col_ip = self._field(
+            row=21, label="Колонка IP:", key="table_col_ip", placeholder="напр. K — сюди пишемо")
 
     def _build_sheets(self) -> None:
         """Секція Google Sheets — параметри авто-режиму таблиці."""
@@ -248,18 +259,18 @@ class SettingsWindow(ctk.CTkToplevel):
         ctk.CTkLabel(
             body, text="Google Sheets (авто-режим таблиці)",
             font=ctk.CTkFont(size=14, weight="bold"), anchor="w",
-        ).grid(row=20, column=0, padx=20, pady=(18, 4), sticky="ew")
+        ).grid(row=22, column=0, padx=20, pady=(18, 4), sticky="ew")
         ctk.CTkLabel(
             body, text="Посилання копіюється з адресного рядка браузера. Таблиця має бути "
                        "відкрита як «будь-хто з посиланням». Аркуш і колонки беруться "
                        "з розділу вище — ті самі, що для .xlsx.",
             font=ctk.CTkFont(size=11), text_color="gray60", anchor="w",
             wraplength=420, justify="left",
-        ).grid(row=21, column=0, padx=20, pady=(0, 6), sticky="ew")
+        ).grid(row=23, column=0, padx=20, pady=(0, 6), sticky="ew")
 
-        self._sheet_url = self._field(row=22, label="Посилання:", key="sheet_url")
+        self._sheet_url = self._field(row=24, label="Посилання:", key="sheet_url")
         self._sheet_key = self._field(
-            row=23, label="API-ключ:", key="sheet_api_key", secret=True)
+            row=25, label="API-ключ:", key="sheet_api_key", secret=True)
 
         ctk.CTkLabel(
             body, text="Ключ створюється в Google Cloud Console (Sheets API, безкоштовно) "
@@ -267,7 +278,89 @@ class SettingsWindow(ctk.CTkToplevel):
                        "а не як анонімний трафік. Зберігається зашифрованим через DPAPI.",
             font=ctk.CTkFont(size=11), text_color="gray60", anchor="w",
             wraplength=420, justify="left",
-        ).grid(row=24, column=0, padx=20, pady=(6, 0), sticky="ew")
+        ).grid(row=26, column=0, padx=20, pady=(6, 0), sticky="ew")
+
+    def _build_mikrotik(self) -> None:
+        """Секція MikroTik — доступ до DHCP-lease роутера (1.3.0)."""
+        body = self._body
+        ctk.CTkLabel(
+            body, text="MikroTik (IP телефонів)",
+            font=ctk.CTkFont(size=14, weight="bold"), anchor="w",
+        ).grid(row=27, column=0, padx=20, pady=(18, 4), sticky="ew")
+        ctk.CTkLabel(
+            body, text="IP беруться з DHCP-lease роутера одним запитом до REST API. "
+                       "Потрібен окремий користувач із політиками read і rest-api "
+                       "(політика api — це інший, бінарний протокол, вона зайва).",
+            font=ctk.CTkFont(size=11), text_color="gray60", anchor="w",
+            wraplength=420, justify="left",
+        ).grid(row=28, column=0, padx=20, pady=(0, 6), sticky="ew")
+
+        self._mt_url = self._field(
+            row=29, label="Адреса роутера:", key="mikrotik_url",
+            placeholder="https://192.168.0.1:8443")
+        self._mt_user = self._field(row=30, label="Логін:", key="mikrotik_user")
+        self._mt_pass = self._field(
+            row=31, label="Пароль:", key="mikrotik_password", secret=True)
+
+        ctk.CTkLabel(
+            body, text="⚠️ Адресу вводити З ПОРТОМ: REST обслуговує сервіс www-ssl, а він "
+                       "рідко живе на 443. Порт має бути дозволений у фаєрволі роутера "
+                       "(chain=input, protocol=tcp). Пароль зберігається під DPAPI.",
+            font=ctk.CTkFont(size=11), text_color="gray60", anchor="w",
+            wraplength=420, justify="left",
+        ).grid(row=32, column=0, padx=20, pady=(6, 0), sticky="ew")
+
+    def _build_google(self) -> None:
+        """Секція авторизації Google — потрібна для ЗАПИСУ IP у таблицю (1.3.0)."""
+        body = self._body
+        ctk.CTkLabel(
+            body, text="Запис IP у таблицю (Google)",
+            font=ctk.CTkFont(size=14, weight="bold"), anchor="w",
+        ).grid(row=33, column=0, padx=20, pady=(18, 4), sticky="ew")
+        ctk.CTkLabel(
+            body, text="API-ключ вище дає лише читання. Щоб програма могла ЗАПИСАТИ IP, "
+                       "потрібна окрема авторизація під акаунтом, який має права редактора "
+                       "таблиці. Обидва кроки робляться один раз.",
+            font=ctk.CTkFont(size=11), text_color="gray60", anchor="w",
+            wraplength=420, justify="left",
+        ).grid(row=34, column=0, padx=20, pady=(0, 6), sticky="ew")
+
+        client_row = ctk.CTkFrame(body, fg_color="transparent")
+        client_row.grid(row=35, column=0, padx=20, pady=(4, 0), sticky="ew")
+        client_row.grid_columnconfigure(1, weight=1)
+        self._btn_client = ctk.CTkButton(
+            client_row, text="1. Завантажити client_secret.json",
+            command=self._on_load_client_json, width=230,
+            fg_color="transparent", border_width=1)
+        self._btn_client.grid(row=0, column=0, sticky="w")
+        self._client_status = ctk.CTkLabel(
+            client_row, text="", font=ctk.CTkFont(size=11), anchor="w")
+        self._client_status.grid(row=0, column=1, padx=(10, 0), sticky="w")
+
+        auth_row = ctk.CTkFrame(body, fg_color="transparent")
+        auth_row.grid(row=36, column=0, padx=20, pady=(6, 0), sticky="ew")
+        auth_row.grid_columnconfigure(2, weight=1)
+        self._btn_auth = ctk.CTkButton(
+            auth_row, text="2. Авторизувати Google",
+            command=self._on_authorize, width=180)
+        self._btn_auth.grid(row=0, column=0, sticky="w")
+        self._btn_auth_reset = ctk.CTkButton(
+            auth_row, text="Скинути", command=self._on_reset_auth, width=90,
+            fg_color="transparent", border_width=1)
+        self._btn_auth_reset.grid(row=0, column=1, padx=(8, 0), sticky="w")
+        self._auth_status = ctk.CTkLabel(
+            auth_row, text="", font=ctk.CTkFont(size=11), anchor="w")
+        self._auth_status.grid(row=0, column=2, padx=(10, 0), sticky="w")
+
+        ctk.CTkLabel(
+            body, text="Відкриється браузер зі сторінкою згоди Google. Застосунок не "
+                       "проходив верифікацію, тому Google покаже попередження — це "
+                       "очікувано (Додатково → Перейти). Токен зберігається під DPAPI.",
+            font=ctk.CTkFont(size=11), text_color="gray60", anchor="w",
+            wraplength=420, justify="left",
+        ).grid(row=37, column=0, padx=20, pady=(6, 0), sticky="ew")
+
+        self._refresh_google_status()
 
     def _field(self, row: int, label: str, key: str,
                secret: bool = False, placeholder: str = "") -> ctk.CTkEntry:
@@ -295,6 +388,102 @@ class SettingsWindow(ctk.CTkToplevel):
     def _on_ari_tls(self) -> None:
         self._config["ari_insecure_tls"] = bool(self._ari_tls_var.get())
         self._apply()
+
+    # ── Авторизація Google ────────────────────────────────────────────────────
+
+    def _refresh_google_status(self) -> None:
+        """Оновлює обидва статуси й доступність кнопок за поточним конфігом."""
+        has_client = bool(str(self._config.get("google_client_id", "")).strip()
+                          and str(self._config.get("google_client_secret", "")).strip())
+        has_token = bool(str(self._config.get("google_oauth_refresh_token", "")).strip())
+
+        self._client_status.configure(
+            text="✓ завантажено" if has_client else "не завантажено",
+            text_color="green" if has_client else "gray60")
+        self._auth_status.configure(
+            text="✓ авторизовано" if has_token else "не авторизовано",
+            text_color="green" if has_token else "gray60")
+
+        # Без облікових даних клієнта авторизувати нема чим: краще неактивна кнопка,
+        # ніж невиразна помилка від Google через два кліки.
+        self._btn_auth.configure(state="normal" if has_client else "disabled")
+        self._btn_auth_reset.configure(state="normal" if has_token else "disabled")
+
+    def _on_load_client_json(self) -> None:
+        """Крок 1: облікові дані OAuth-клієнта з файлу, який дає Google Cloud."""
+        path = filedialog.askopenfilename(
+            parent=self, title="Виберіть client_secret.json",
+            filetypes=[("JSON", "*.json"), ("Усі файли", "*.*")])
+        if not path:
+            return
+        try:
+            client_id, client_secret = load_client_json(path)
+        except GoogleAuthError as exc:
+            messagebox.showerror("Не той файл", str(exc), parent=self)
+            return
+
+        # ⚠️ Зміна клієнта робить наявний refresh-токен непридатним: він виданий
+        # ІНШОМУ client_id. Лишити його — означало б показувати «авторизовано»
+        # там, де перший же запит впаде з invalid_grant.
+        if client_id != str(self._config.get("google_client_id", "")):
+            if self._config.get("google_oauth_refresh_token"):
+                log.info("Клієнт OAuth змінився — стару авторизацію скинуто.")
+            self._config["google_oauth_refresh_token"] = ""
+
+        self._config["google_client_id"] = client_id
+        self._config["google_client_secret"] = client_secret
+        self._apply()
+        self._refresh_google_status()
+
+    def _on_authorize(self) -> None:
+        """
+        Крок 2: повний OAuth-цикл.
+
+        Тільки у фоновому потоці: `authorize()` тримає локальний сервер і чекає, поки
+        користувач завершить згоду в браузері — до трьох хвилин із замороженим GUI.
+        """
+        BackgroundTask(
+            root=self, label="Очікую згоду в браузері...",
+            btn_lock=[self._btn_auth, self._btn_auth_reset, self._btn_client],
+        ).run(
+            work=lambda: authorize(
+                str(self._config.get("google_client_id", "")),
+                str(self._config.get("google_client_secret", "")),
+            ),
+            on_done=self._on_authorized,
+            on_error=self._on_auth_failed,
+        )
+
+    def _on_authorized(self, refresh_token: str) -> None:
+        self._config["google_oauth_refresh_token"] = refresh_token
+        self._apply()
+        self._refresh_google_status()
+        messagebox.showinfo(
+            "Готово", "Авторизацію завершено — програма може писати IP у таблицю.",
+            parent=self)
+
+    def _on_auth_failed(self, exc: Exception) -> None:
+        log.error(f"Авторизація Google не вдалась: {exc}")
+        self._refresh_google_status()
+        messagebox.showerror("Авторизація не вдалась", str(exc), parent=self)
+
+    def _on_reset_auth(self) -> None:
+        """
+        Скидає ТІЛЬКИ токен, лишаючи облікові дані клієнта.
+
+        Саме так і треба: найчастіший привід скинути — перевидати токен (наприклад,
+        після переведення застосунку в production), а клієнт при цьому той самий.
+        """
+        if not messagebox.askyesno(
+                "Скинути авторизацію",
+                "Прибрати збережену авторизацію Google?\n\n"
+                "Дані OAuth-клієнта лишаться — знадобиться лише пройти згоду заново.",
+                parent=self):
+            return
+        self._config["google_oauth_refresh_token"] = ""
+        self._apply()
+        self._refresh_google_status()
+        log.info("Авторизацію Google скинуто користувачем.")
 
     def _build_footer(self) -> None:
         """Кнопка «Закрити» — на self, ПОЗА self._body: не має ховатись у прокрутці."""
